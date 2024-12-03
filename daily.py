@@ -97,6 +97,7 @@ def get_agent_status_details():
 
         all_data.extend(process_response(response_data, processed_user_ids))
         offset += response_data.get("limit", 50)
+        print(offset)
 
         if not response_data.get("hasMore", False):
             break

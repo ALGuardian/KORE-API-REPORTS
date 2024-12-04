@@ -3,9 +3,34 @@ import pandas as pd
 import requests
 import time
 import json
-import os
+import snowflake.connector
+from snowflake.connector.pandas_tools import write_pandas
+
 
 CREDENTIALS = "Credentials/kore_credentials.json"
+
+def load_snowflake_credentials():
+    try:
+        with open('Credentials/snowflake_credentials.json', 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"Issue with Snowflake credentials: {e}")
+        raise
+
+def connect_to_snowflake():
+    creds = load_snowflake_credentials()
+    try:
+        return snowflake.connector.connect(
+            user=creds['user'],
+            password=creds['password'],
+            account=creds['account'],
+            warehouse=creds['warehouse'],
+            database=creds['database'],
+            schema=creds['schema']
+        )
+    except Exception as e:
+        print(f"Cannot connect to Snowflake: {e}")
+        raise
 
 def check_credentials():
     try:
@@ -61,6 +86,40 @@ def flatten_data(user_data):
 
     return flattened_rows
 
+def upload_to_snowflake(data):
+    if data:
+        conn = connect_to_snowflake()
+        try:
+            df = pd.DataFrame(data)
+
+            df.columns = [
+                "USER_ID", "FIRST_NAME", "LAST_NAME", "EMAIL",
+                "START_TIME", "END_TIME", "METRIC", "VALUE", "DURATION_SEC"
+            ]
+
+            cursor = conn.cursor()
+            cursor.execute("USE DATABASE ICON_GLG")
+            cursor.execute("USE SCHEMA KORE")
+            print("Uploading data to Snowflake...")
+
+            # Write DataFrame to Snowflake
+            success, nchunks, nrows, _ = write_pandas(
+            conn=conn,
+            df=df,
+            table_name="AGENT_STATUS2",
+            schema="KORE",
+            database="ICON_GLG"
+            )
+        
+            if success:
+                print(f"Successfully uploaded {nrows} rows in {nchunks} chunks.")
+            else:
+                print("Data upload failed.")
+        finally:
+            conn.close()
+    else:
+        print("No data to upload.")
+
 def get_users_status(host, account_id, token, bot_id):
     url_template = f"https://{host}/agentassist/api/public/analytics/1.1/account/{account_id}/userstatus"
     headers = {
@@ -85,11 +144,8 @@ def get_users_status(host, account_id, token, bot_id):
         "granularity": "PT30M"
     }
 
-    csv_filename = f"agent_status_hourly.csv"
-    is_new_file = not os.path.exists(csv_filename)
     offset = 0
     request_count = 0
-
     all_data = []
     seen_user_ids = set()
 
@@ -111,7 +167,7 @@ def get_users_status(host, account_id, token, bot_id):
                     user_id = user.get("userId")
                     if user_id in seen_user_ids:
                         print(f"Duplicate User ID found: {user_id}. Stopping process.")
-                        save_data_to_csv(all_data, csv_filename, is_new_file)
+                        upload_to_snowflake(all_data)
                         return
 
                     seen_user_ids.add(user_id)
@@ -137,15 +193,8 @@ def get_users_status(host, account_id, token, bot_id):
             print(f"Error during request: {e}")
             break
 
-    save_data_to_csv(all_data, csv_filename, is_new_file)
+    upload_to_snowflake(all_data)
 
-def save_data_to_csv(data, csv_filename, is_new_file):
-    if data:
-        df = pd.DataFrame(data)
-        df.to_csv(csv_filename, index=False, mode="w" if is_new_file else "a", header=is_new_file)
-        print(f"Data saved to {csv_filename}.")
-    else:
-        print("No data to save.")
-
-host, account_id, token, bot_id = check_credentials()
-get_users_status(host, account_id, token, bot_id)
+if __name__ == "__main__":
+    host, account_id, token, bot_id = check_credentials()
+    get_users_status(host, account_id, token, bot_id)

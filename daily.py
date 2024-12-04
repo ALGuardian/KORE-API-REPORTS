@@ -2,8 +2,34 @@ import pandas as pd
 from datetime import datetime, timedelta
 import requests
 import json
+import snowflake.connector
+from snowflake.connector.pandas_tools import write_pandas
+
 
 CREDENTIALS = "Credentials/kore_credentials.json"
+
+def load_snowflake_credentials():
+    try:
+        with open('Credentials/snowflake_credentials.json', 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"Issue with Snowflake credentials: {e}")
+        raise
+
+def connect_to_snowflake():
+    creds = load_snowflake_credentials()
+    try:
+        return snowflake.connector.connect(
+            user=creds['user'],
+            password=creds['password'],
+            account=creds['account'],
+            warehouse=creds['warehouse'],
+            database=creds['database'],
+            schema=creds['schema']
+        )
+    except Exception as e:
+        print(f"Cannot connect to Snowflake: {e}")
+        raise
 
 def check_credentials():
     try:
@@ -40,7 +66,11 @@ def process_response(data, processed_user_ids):
         if statuses:
             for status in statuses:
                 flattened_data.append({
-                    **base_info,
+                    "userId": base_info["userId"],
+                    "firstName": base_info["firstName"],
+                    "lastName": base_info["lastName"],
+                    "email": base_info["email"],
+                    "customId": base_info["customId"],
                     "primaryStatus": status.get("primaryStatus"),
                     "secondaryStatus": status.get("secondaryStatus"),
                     "startTime": status.get("startTime"),
@@ -49,14 +79,42 @@ def process_response(data, processed_user_ids):
                 })
         else:
             # Si no hay estados, registrar el usuario sin subestados
-            flattened_data.append(base_info)
+            flattened_data.append({
+                **base_info,
+                "primaryStatus": None,
+                "secondaryStatus": None,
+                "startTime": None,
+                "endTime": None,
+                "duration": None
+            })
     return flattened_data
 
-def save_to_excel(data, filename):
-    df = pd.DataFrame(data)
-    excel_filename = filename.replace('.csv', '.xlsx')
-    df.to_excel(excel_filename, index=False)
-    print(f"Data saved to {excel_filename}")
+def upload_to_snowflake(data):
+    conn = connect_to_snowflake()
+    try:
+        # Convertir la lista de datos en un DataFrame
+        df = pd.DataFrame(data)
+
+        df.columns = [col.upper() for col in df.columns]
+        
+        # Subir el DataFrame a Snowflake
+        success, nchunks, nrows, _ = write_pandas(
+            conn=conn,
+            df=df,
+            table_name="AGENT_STATUS",
+            schema="KORE",
+            database="ICON_GLG"
+        )
+        
+        if success:
+            print(f"Data uploaded successfully: {nrows} rows inserted in {nchunks} chunks.")
+        else:
+            print("Failed to upload data to Snowflake.")
+    except Exception as e:
+        print(f"Error uploading DataFrame to Snowflake: {e}")
+    finally:
+        conn.close()
+
 
 def get_agent_status_details():
     host, account_id, token, bot_id = check_credentials()
@@ -82,7 +140,6 @@ def get_agent_status_details():
         }
     }
     
-    csv_filename = f"Agent_Status_Details_{date}.csv"
     offset = 0
     processed_user_ids = set()
     all_data = []
@@ -102,7 +159,8 @@ def get_agent_status_details():
         if not response_data.get("hasMore", False):
             break
 
-    save_to_excel(all_data, csv_filename)
+    if all_data:
+        upload_to_snowflake(all_data)
 
 if __name__ == "__main__":
     get_agent_status_details()

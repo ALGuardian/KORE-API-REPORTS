@@ -1,2 +1,5 @@
 Data_Reports/
 Credentials/
+
+*.json
+*.xlsx

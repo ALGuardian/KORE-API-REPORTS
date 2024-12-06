@@ -219,7 +219,8 @@ if __name__ == "__main__":
         "dispositions": "DISPOSITIONS",
         "dispositionRemarks": "DISPOSITIONREMARKS",
         "metaInfo": "METAINFO",
-        "destinations": "DESTINATIONS"
+        "destinations": "DESTINATIONS",
+        "csatScore": "CSATSCORE"
     })
 
     # Upload DataFrame to Snowflake
